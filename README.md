@@ -132,6 +132,7 @@ python3 -m riscy.app riscy/tools/riscv_asm_to_hex_example.s
 - `Ctrl+h/j/k/l`: move window focus (Program / Memory / Registers)
 - `j` / `k`: scroll the focused window (Program cursor, Memory, or Registers)
 - `p`: recenter the focused window on the current `PC`
+- `m`: select the execution backend
 - `?`: toggle the keybindings help overlay
 - `q`: quit
 
@@ -139,6 +140,24 @@ The focused window is highlighted with a cyan border. Breakpoints are shown with
 a `●` marker in the Program panel, and the selected line is highlighted. `continue`,
 `run to end`, and `run to cursor` all stop on a safety step limit so an infinite
 loop cannot hang the UI.
+
+## Backends
+
+`m` opens a popup to switch the execution backend:
+
+- **single-cycle**: the Python reference model (`s` = one instruction).
+- **pipeline (verilog)**: the actual `week13` RISC-V pipeline driven through
+  Verilator (`s` = one clock cycle). When active, a **Pipeline** panel below
+  Memory shows the five datapath stages (IF / ID / EX / MEM / WB) with the
+  instruction flowing through each one. This backend is only available once the
+  shared library is built:
+
+  ```bash
+  make -C hdl
+  ```
+
+  See `hdl/HDL_NOTES.md` for how the Verilog model is vendored (verbatim, never
+  modified) and driven.
 
 ## Interface Overview
 
