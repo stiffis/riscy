@@ -94,7 +94,7 @@ No third-party Python packages are required.
 No installation step is required beyond having Python available.
 
 ```bash
-git clone <repo-url> riscy
+git clone git@github.com:stiffis/riscy.git
 cd riscy
 ```
 
