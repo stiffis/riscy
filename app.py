@@ -195,9 +195,9 @@ def render(stdscr, cpu, program_name: str, ui: UIState, backends) -> None:
     pipe_h = 5 if is_pipeline else 0
     content_h = body_h - pipe_h
     program_h = min(18, content_h - 8)
-    bottom_y = body_y + program_h
+    pipe_y = body_y + program_h
+    bottom_y = pipe_y + pipe_h
     bottom_h = content_h - program_h
-    pipe_y = body_y + content_h
     info_w = max(32, min(40, left_w // 3))
     program_w = left_w
     program_list_w = min(left_w - info_w, 68)
