@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from riscy.backend import CPUBackend, StepResult
 
 
 ABI_NAMES = [
@@ -9,16 +9,6 @@ ABI_NAMES = [
     "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7",
     "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6",
 ]
-
-
-@dataclass
-class StepResult:
-    pc_before: int
-    instruction: int
-    disasm: str
-    changed_registers: list[int] = field(default_factory=list)
-    changed_memory: list[int] = field(default_factory=list)
-    events: list[str] = field(default_factory=list)
 
 
 def sign_extend(value: int, bits: int) -> int:
@@ -198,13 +188,15 @@ def instruction_info(word: int, pc: int = 0) -> list[str]:
     return lines
 
 
-class ReferenceCPU:
+class ReferenceCPU(CPUBackend):
+    model_name = "reference"
+
     def __init__(self, words: list[int], pc_base: int = 0):
+        super().__init__()
         self.words = words[:]
         self.pc_base = pc_base
         self.initial_memory = {pc_base + index * 4: word for index, word in enumerate(words)}
         self.program_end = pc_base + len(words) * 4
-        self.breakpoints: set[int] = set()
         self.reset()
 
     def reset(self) -> None:
@@ -360,46 +352,3 @@ class ReferenceCPU:
             events=events,
         )
         return self.last_result
-
-    def run(self, steps: int) -> list[StepResult]:
-        results = []
-        for _ in range(steps):
-            if self.halted:
-                break
-            results.append(self.step())
-        return results
-
-    def toggle_breakpoint(self, addr: int) -> bool:
-        if addr in self.breakpoints:
-            self.breakpoints.discard(addr)
-            return False
-        self.breakpoints.add(addr)
-        return True
-
-    def continue_run(self, max_steps: int = 100_000) -> list[StepResult]:
-        results = []
-        for _ in range(max_steps):
-            if self.halted:
-                break
-            results.append(self.step())
-            if self.pc in self.breakpoints:
-                break
-        return results
-
-    def run_to_end(self, max_steps: int = 100_000) -> list[StepResult]:
-        results = []
-        for _ in range(max_steps):
-            if self.halted:
-                break
-            results.append(self.step())
-        return results
-
-    def run_to_address(self, addr: int, max_steps: int = 100_000) -> list[StepResult]:
-        results = []
-        for _ in range(max_steps):
-            if self.halted:
-                break
-            results.append(self.step())
-            if self.pc == addr:
-                break
-        return results
