@@ -11,6 +11,7 @@ if __package__ in (None, ""):
 
 from riscy.asm_loader import load_program
 from riscy.single_cycle_cpu import ABI_NAMES, SingleCycleCPU, disassemble_word, instruction_info
+from riscy.verilog_backend import DEFAULT_LIB, VerilogPipelineCPU
 
 
 PROGRAM_LINES = 14
@@ -43,6 +44,8 @@ class UIState:
     prog_cursor: int = 0
     reg_top: int = 0
     help_visible: bool = False
+    backend_visible: bool = False
+    backend_index: int = 0
 
 
 HELP_LINES = [
@@ -56,9 +59,12 @@ HELP_LINES = [
     "Ctrl+h/j/k/l  move focus between windows",
     "j / k         scroll the focused window",
     "p             recenter focused window on PC",
+    "m             select execution backend",
     "?             toggle this help",
     "q             quit",
 ]
+
+STAGE_NAMES = ["IF", "ID", "EX", "MEM", "WB"]
 
 
 def draw_box(
@@ -110,7 +116,27 @@ def format_reg_line(idx: int, value: int) -> str:
     return f"x{idx:02d} {ABI_NAMES[idx]:>4}  0x{value:08X}"
 
 
-def render(stdscr, cpu: SingleCycleCPU, program_name: str, ui: UIState) -> None:
+def draw_pipeline(stdscr, cpu, pipe_y, width, normal_attr, pc_attr, ok_attr, dim_attr) -> None:
+    stages = cpu.pipeline_stages()
+    safe_addstr(stdscr, pipe_y + 1, 14, f" cycle {cpu.step_count} ", dim_attr)
+    cell_w = max(10, (width - 4) // 5)
+    name_row = pipe_y + 2
+    instr_row = pipe_y + 3
+    stage_attr = {0: pc_attr, 4: ok_attr}
+    for i, (name, pc, instr) in enumerate(stages):
+        x = 2 + i * cell_w
+        attr = stage_attr.get(i, normal_attr)
+        if i > 0:
+            safe_addstr(stdscr, instr_row, x - 2, "▶", dim_attr)
+        safe_addstr(stdscr, name_row, x, name, attr | curses.A_BOLD)
+        if pc is None:
+            safe_addstr(stdscr, instr_row, x, "· bubble", dim_attr)
+        else:
+            text = f"0x{pc:02X} {disassemble_word(instr, pc)}"
+            safe_addstr(stdscr, instr_row, x, text[: cell_w - 2], attr)
+
+
+def render(stdscr, cpu, program_name: str, ui: UIState, backends) -> None:
     stdscr.erase()
     max_y, max_x = stdscr.getmaxyx()
     if max_y < 28 or max_x < 110:
@@ -134,18 +160,20 @@ def render(stdscr, cpu: SingleCycleCPU, program_name: str, ui: UIState) -> None:
             return focus_title, focus_border
         return title_attr, border_attr
 
+    is_pipeline = hasattr(cpu, "pipeline_stages")
     backend = getattr(cpu, "model_name", "single-cycle")
     safe_addstr(stdscr, 0, 0, " COMP-ARCH TUI Debugger ", title_attr)
-    safe_addstr(stdscr, 0, 28, f"backend: {backend} reference", pc_attr)
+    safe_addstr(stdscr, 0, 28, f"backend: {backend}", pc_attr)
     safe_addstr(stdscr, 1, 0, f"file: {program_name}", normal_attr)
-    safe_addstr(stdscr, 1, max(46, len(program_name) + 12), "press ? for keybindings", dim_attr)
+    safe_addstr(stdscr, 1, max(46, len(program_name) + 12), "press ? for keybindings | m for backend", dim_attr)
 
-    current_word = cpu.memory.get(cpu.pc, 0)
+    current_word = cpu.instruction_at(cpu.pc)
     halted_attr = warn_attr if cpu.halted else ok_attr
     state = "HALTED" if cpu.halted else "running"
+    unit = "cycles" if is_pipeline else "steps"
     segments = [
         (f"PC 0x{cpu.pc:08X}", pc_attr),
-        (f"steps {cpu.step_count}", normal_attr),
+        (f"{unit} {cpu.step_count}", normal_attr),
         (f"state {state}", halted_attr),
         (f"bkpts {len(cpu.breakpoints)}", normal_attr),
         (f"focus {ui.focus}", dim_attr),
@@ -164,9 +192,12 @@ def render(stdscr, cpu: SingleCycleCPU, program_name: str, ui: UIState) -> None:
     body_h = max_y - body_y - 1
     reg_w = 30
     left_w = max_x - reg_w
-    program_h = min(18, body_h - 8)
+    pipe_h = 5 if is_pipeline else 0
+    content_h = body_h - pipe_h
+    program_h = min(18, content_h - 8)
     bottom_y = body_y + program_h
-    bottom_h = body_h - program_h
+    bottom_h = content_h - program_h
+    pipe_y = body_y + content_h
     info_w = max(32, min(40, left_w // 3))
     program_w = left_w
     program_list_w = min(left_w - info_w, 68)
@@ -179,6 +210,9 @@ def render(stdscr, cpu: SingleCycleCPU, program_name: str, ui: UIState) -> None:
     draw_box(stdscr, body_y, 0, program_h, program_w, "Program", prog_title, prog_border)
     draw_box(stdscr, body_y, left_w, body_h, reg_w, "Registers", reg_title, reg_border)
     draw_box(stdscr, bottom_y, 0, bottom_h, left_w, "Memory", mem_title, mem_border)
+    if is_pipeline:
+        draw_box(stdscr, pipe_y, 0, pipe_h, left_w, "Pipeline", title_attr, border_attr)
+        draw_pipeline(stdscr, cpu, pipe_y, left_w, normal_attr, pc_attr, ok_attr, dim_attr)
 
     sep_x = program_list_w
     prog_bottom = min(body_y + program_h - 1, max_y - 2)
@@ -202,7 +236,7 @@ def render(stdscr, cpu: SingleCycleCPU, program_name: str, ui: UIState) -> None:
 
     for row, index in enumerate(range(ui.prog_top, ui.prog_top + PROGRAM_LINES), start=6):
         addr = index * 4
-        word = cpu.memory.get(addr, 0)
+        word = cpu.instruction_at(addr)
         bp_char = "●" if addr in cpu.breakpoints else " "
         pc_char = ">" if addr == cpu.pc else " "
         marker = f"{bp_char}{pc_char}"
@@ -249,7 +283,7 @@ def render(stdscr, cpu: SingleCycleCPU, program_name: str, ui: UIState) -> None:
         safe_addstr(stdscr, mem_header_y + 1 + i, 2, f"0x{addr:08X}", addr_attr)
         safe_addstr(stdscr, mem_header_y + 1 + i, 16, f"0x{value:08X}", value_attr)
 
-    safe_addstr(stdscr, max_y - 1, 0, " Single-cycle Python reference model active ", title_attr)
+    safe_addstr(stdscr, max_y - 1, 0, f" {backend} backend active ", title_attr)
 
     if ui.help_visible:
         hh = len(HELP_LINES) + 3
@@ -261,6 +295,26 @@ def render(stdscr, cpu: SingleCycleCPU, program_name: str, ui: UIState) -> None:
         draw_box(stdscr, hy, hx, hh, hw, "Help", focus_title, focus_border)
         for i, line in enumerate(HELP_LINES):
             safe_addstr(stdscr, hy + 2 + i, hx + 2, line, normal_attr)
+
+    if ui.backend_visible:
+        lines = []
+        for label, _factory, available in backends:
+            suffix = "" if available else "  (unavailable: run make -C hdl)"
+            lines.append(f"{label}{suffix}")
+        hh = len(lines) + 4
+        hw = max(len(line) for line in lines) + 8
+        hy = max(0, (max_y - hh) // 2)
+        hx = max(0, (max_x - hw) // 2)
+        for r in range(1, hh):
+            safe_addstr(stdscr, hy + r, hx, " " * hw, normal_attr)
+        draw_box(stdscr, hy, hx, hh, hw, "Select backend", focus_title, focus_border)
+        for i, line in enumerate(lines):
+            available = backends[i][2]
+            selected = i == ui.backend_index
+            marker = "> " if selected else "  "
+            base = normal_attr if available else dim_attr
+            attr = (base | curses.A_REVERSE) if selected else base
+            safe_addstr(stdscr, hy + 2 + i, hx + 2, f"{marker}{line}", attr)
 
     stdscr.refresh()
 
@@ -286,7 +340,7 @@ def recenter_focused(ui: UIState, cpu: SingleCycleCPU) -> None:
         ui.reg_top = 0
 
 
-def run_curses(stdscr, cpu: SingleCycleCPU, program_name: str) -> None:
+def run_curses(stdscr, backends, program_name: str) -> None:
     global DEFAULT_ATTR
     curses.curs_set(0)
     stdscr.nodelay(False)
@@ -303,9 +357,10 @@ def run_curses(stdscr, cpu: SingleCycleCPU, program_name: str) -> None:
     DEFAULT_ATTR = curses.color_pair(1)
     stdscr.bkgd(" ", DEFAULT_ATTR)
 
+    cpu = backends[0][1]()
     ui = UIState(prog_cursor=cpu.pc // 4)
     while True:
-        render(stdscr, cpu, program_name, ui)
+        render(stdscr, cpu, program_name, ui, backends)
         key = stdscr.getch()
         if key in (ord("q"), ord("Q")):
             break
@@ -314,6 +369,24 @@ def run_curses(stdscr, cpu: SingleCycleCPU, program_name: str) -> None:
             continue
         if ui.help_visible:
             ui.help_visible = False
+            continue
+        if ui.backend_visible:
+            if key in (ord("j"), curses.KEY_DOWN):
+                ui.backend_index = min(len(backends) - 1, ui.backend_index + 1)
+            elif key in (ord("k"), curses.KEY_UP):
+                ui.backend_index = max(0, ui.backend_index - 1)
+            elif key in (curses.KEY_ENTER, 10, 13):
+                if backends[ui.backend_index][2]:
+                    cpu = backends[ui.backend_index][1]()
+                    ui.prog_cursor = cpu.pc // 4
+                    ui.prog_top = 0
+                    ui.mem_base = 0
+                ui.backend_visible = False
+            else:
+                ui.backend_visible = False
+            continue
+        if key in (ord("m"), ord("M")):
+            ui.backend_visible = True
             continue
         if (ui.focus, key) in FOCUS_MOVES:
             ui.focus = FOCUS_MOVES[(ui.focus, key)]
@@ -345,8 +418,12 @@ def main() -> int:
     args = parser.parse_args()
 
     image = load_program(args.program)
-    cpu = SingleCycleCPU(image.words)
-    curses.wrapper(run_curses, cpu, image.path.name)
+    words = image.words
+    backends = [
+        ("single-cycle", lambda: SingleCycleCPU(words), True),
+        ("pipeline (verilog)", lambda: VerilogPipelineCPU(words), DEFAULT_LIB.exists()),
+    ]
+    curses.wrapper(run_curses, backends, image.path.name)
     return 0
 
 
