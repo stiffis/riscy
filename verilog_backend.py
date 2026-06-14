@@ -10,6 +10,8 @@ from riscy.reference_cpu import disassemble_word, reg_name
 
 DEFAULT_LIB = Path(__file__).resolve().parent / "hdl" / "libriscy_vtop.so"
 DMEM_WORDS = 64
+IMEM_WORDS = 64
+STAGE_NAMES = ["IF", "ID", "EX", "MEM", "WB"]
 
 
 @contextlib.contextmanager
@@ -83,7 +85,23 @@ class VerilogPipelineCPU(CPUBackend):
         self.step_count = 0
         self.halted = False
         self._idle = 0
-        self.last_result = StepResult(self.pc, self._lib.sim_imem(self._handle, self.pc >> 2), "reset", [], [], ["pipeline reset"])
+        self._stages = [(self.pc, self.instruction_at(self.pc)), None, None, None, None]
+        self.last_result = StepResult(self.pc, self.instruction_at(self.pc), "reset", [], [], ["pipeline reset"])
+
+    def instruction_at(self, addr: int) -> int:
+        word = addr >> 2
+        if 0 <= word < IMEM_WORDS:
+            return self._lib.sim_imem(self._handle, word)
+        return 0
+
+    def pipeline_stages(self) -> list[tuple[str, int | None, int | None]]:
+        out = []
+        for name, slot in zip(STAGE_NAMES, self._stages):
+            if slot is None:
+                out.append((name, None, None))
+            else:
+                out.append((name, slot[0], slot[1]))
+        return out
 
     def step(self) -> StepResult:
         if self.halted:
@@ -112,6 +130,7 @@ class VerilogPipelineCPU(CPUBackend):
 
         self.registers = regs_after
         self.memory = mem_after
+        self._stages = [(self.pc, self.instruction_at(self.pc))] + self._stages[:4]
         if self.pc >= self.program_end and not changed_registers and not changed_memory:
             self._idle += 1
         else:

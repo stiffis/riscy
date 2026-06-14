@@ -26,6 +26,19 @@ class VerilogPipelineTests(unittest.TestCase):
         for addr, value in expected.items():
             self.assertEqual(cpu.memory.get(addr, 0), value, f"Mem[{addr}]")
 
+    def test_shadow_pipeline_matches_hardware(self) -> None:
+        cpu = VerilogPipelineCPU(load_words(PROGRAM))
+        for _ in range(40):
+            cpu.step()
+            stages = cpu.pipeline_stages()
+            id_pc, id_instr = stages[1][1], stages[1][2]
+            if id_pc is not None:
+                self.assertEqual(id_instr, cpu._lib.sim_instr_d(cpu._handle), "ID instr")
+                self.assertEqual(id_pc, cpu._lib.sim_pc_d(cpu._handle), "ID pc")
+            ex_pc = stages[2][1]
+            if ex_pc is not None:
+                self.assertEqual(ex_pc, cpu._lib.sim_pc_e(cpu._handle), "EX pc")
+
     def test_reset_clears_state(self) -> None:
         cpu = VerilogPipelineCPU(load_words(PROGRAM))
         for _ in range(120):

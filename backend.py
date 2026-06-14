@@ -35,6 +35,9 @@ class CPUBackend(ABC):
     def step(self) -> StepResult:
         ...
 
+    def instruction_at(self, addr: int) -> int:
+        return self.memory.get(addr, 0)
+
     def run(self, steps: int) -> list[StepResult]:
         results = []
         for _ in range(steps):
