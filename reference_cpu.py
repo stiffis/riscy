@@ -10,6 +10,15 @@ ABI_NAMES = [
     "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6",
 ]
 
+DEFAULT_SP = 0x7FFFFFF0
+
+
+def words_to_bytes(words: list[int]) -> bytes:
+    out = bytearray()
+    for word in words:
+        out += (word & 0xFFFFFFFF).to_bytes(4, "little")
+    return bytes(out)
+
 
 def sign_extend(value: int, bits: int) -> int:
     sign_bit = 1 << (bits - 1)
@@ -76,6 +85,7 @@ def disassemble_word(word: int, pc: int = 0) -> str:
             (0x0, 0x20): "sub",
             (0x1, 0x00): "sll",
             (0x2, 0x00): "slt",
+            (0x3, 0x00): "sltu",
             (0x4, 0x00): "xor",
             (0x5, 0x00): "srl",
             (0x5, 0x20): "sra",
@@ -91,6 +101,8 @@ def disassemble_word(word: int, pc: int = 0) -> str:
             return f"addi x{rd}, x{rs1}, {imm}"
         if funct3 == 0x2:
             return f"slti x{rd}, x{rs1}, {imm}"
+        if funct3 == 0x3:
+            return f"sltiu x{rd}, x{rs1}, {imm}"
         if funct3 == 0x4:
             return f"xori x{rd}, x{rs1}, {imm}"
         if funct3 == 0x6:
@@ -106,20 +118,31 @@ def disassemble_word(word: int, pc: int = 0) -> str:
             return f"srai x{rd}, x{rs1}, {shamt}"
         return f"unknown-i 0x{word:08X}"
 
-    if opcode == 0x03 and funct3 == 0x2:
-        return f"lw x{rd}, {decode_i_imm(word)}(x{rs1})"
+    if opcode == 0x03:
+        names = {0x0: "lb", 0x1: "lh", 0x2: "lw", 0x4: "lbu", 0x5: "lhu"}
+        name = names.get(funct3)
+        if name:
+            return f"{name} x{rd}, {decode_i_imm(word)}(x{rs1})"
+        return f"unknown-load 0x{word:08X}"
 
-    if opcode == 0x23 and funct3 == 0x2:
-        return f"sw x{rs2}, {decode_s_imm(word)}(x{rs1})"
+    if opcode == 0x23:
+        names = {0x0: "sb", 0x1: "sh", 0x2: "sw"}
+        name = names.get(funct3)
+        if name:
+            return f"{name} x{rs2}, {decode_s_imm(word)}(x{rs1})"
+        return f"unknown-store 0x{word:08X}"
 
     if opcode == 0x63:
-        names = {0x0: "beq", 0x1: "bne", 0x4: "blt", 0x5: "bge"}
+        names = {0x0: "beq", 0x1: "bne", 0x4: "blt", 0x5: "bge", 0x6: "bltu", 0x7: "bgeu"}
         name = names.get(funct3, "unknown-b")
         target = pc + decode_b_imm(word)
         return f"{name} x{rs1}, x{rs2}, 0x{target:08X}"
 
     if opcode == 0x37:
         return f"lui x{rd}, 0x{decode_u_imm(word) >> 12:X}"
+
+    if opcode == 0x17:
+        return f"auipc x{rd}, 0x{decode_u_imm(word) >> 12:X}"
 
     if opcode == 0x6F:
         target = pc + decode_j_imm(word)
@@ -172,7 +195,7 @@ def instruction_info(word: int, pc: int = 0) -> list[str]:
         )
         lines.append(f"imm_b  : {imm_b:013b}")
         lines.append(f"target : 0x{(pc + offset) & 0xFFFFFFFF:08X}")
-    elif opcode == 0x37:
+    elif opcode in {0x37, 0x17}:
         lines.append(f"imm_u  : {(decode_u_imm(word) >> 12):020b}")
     elif opcode == 0x6F:
         offset = decode_j_imm(word)
@@ -195,27 +218,61 @@ class ReferenceCPU(CPUBackend):
         super().__init__()
         self.words = words[:]
         self.pc_base = pc_base
-        self.initial_memory = {pc_base + index * 4: word for index, word in enumerate(words)}
-        self.program_end = pc_base + len(words) * 4
+        program = words_to_bytes(words)
+        self.initial_memory = {(pc_base + i) & 0xFFFFFFFF: b for i, b in enumerate(program) if b}
+        self.program_end = pc_base + len(program)
         self.reset()
 
     def reset(self) -> None:
         self.registers = [0] * 32
+        self.registers[2] = DEFAULT_SP
         self.memory = dict(self.initial_memory)
         self.pc = self.pc_base
         self.step_count = 0
         self.halted = False
-        self.last_result = StepResult(self.pc, self.memory.get(self.pc, 0), "reset", [], [], ["CPU reset"])
+        self.last_result = StepResult(self.pc, self.read_word(self.pc), "reset", [], [], ["CPU reset"])
+
+    def read_byte(self, addr: int) -> int:
+        return self.memory.get(addr & 0xFFFFFFFF, 0)
+
+    def write_byte(self, addr: int, value: int) -> None:
+        addr &= 0xFFFFFFFF
+        value &= 0xFF
+        if value:
+            self.memory[addr] = value
+        else:
+            self.memory.pop(addr, None)
+
+    def read_half(self, addr: int) -> int:
+        return self.read_byte(addr) | (self.read_byte(addr + 1) << 8)
+
+    def write_half(self, addr: int, value: int) -> None:
+        self.write_byte(addr, value)
+        self.write_byte(addr + 1, value >> 8)
 
     def read_word(self, addr: int) -> int:
-        if addr % 4 != 0:
-            raise RuntimeError(f"Unaligned word access at 0x{addr:08X}")
-        return self.memory.get(addr, 0)
+        return (
+            self.read_byte(addr)
+            | (self.read_byte(addr + 1) << 8)
+            | (self.read_byte(addr + 2) << 16)
+            | (self.read_byte(addr + 3) << 24)
+        )
 
     def write_word(self, addr: int, value: int) -> None:
-        if addr % 4 != 0:
-            raise RuntimeError(f"Unaligned word access at 0x{addr:08X}")
-        self.memory[addr] = value & 0xFFFFFFFF
+        self.write_byte(addr, value)
+        self.write_byte(addr + 1, value >> 8)
+        self.write_byte(addr + 2, value >> 16)
+        self.write_byte(addr + 3, value >> 24)
+
+    def instruction_at(self, addr: int) -> int:
+        return self.read_word(addr)
+
+    def data_word(self, addr: int) -> int:
+        return self.read_word(addr)
+
+    @staticmethod
+    def _touched_words(addr: int, nbytes: int) -> list[int]:
+        return sorted({(addr + k) & 0xFFFFFFFC for k in range(nbytes)})
 
     def _write_reg(self, idx: int, value: int, changed: list[int], events: list[str]) -> None:
         if idx == 0:
@@ -257,6 +314,8 @@ class ReferenceCPU(CPUBackend):
                 self._write_reg(rd, r1 << (r2 & 0x1F), changed_registers, events)
             elif funct3 == 0x2 and funct7 == 0x00:
                 self._write_reg(rd, int(to_signed32(r1) < to_signed32(r2)), changed_registers, events)
+            elif funct3 == 0x3 and funct7 == 0x00:
+                self._write_reg(rd, int(r1 < r2), changed_registers, events)
             elif funct3 == 0x4 and funct7 == 0x00:
                 self._write_reg(rd, r1 ^ r2, changed_registers, events)
             elif funct3 == 0x5 and funct7 == 0x00:
@@ -276,6 +335,8 @@ class ReferenceCPU(CPUBackend):
                 self._write_reg(rd, r1 + imm, changed_registers, events)
             elif funct3 == 0x2:
                 self._write_reg(rd, int(to_signed32(r1) < imm), changed_registers, events)
+            elif funct3 == 0x3:
+                self._write_reg(rd, int(r1 < (imm & 0xFFFFFFFF)), changed_registers, events)
             elif funct3 == 0x4:
                 self._write_reg(rd, r1 ^ imm, changed_registers, events)
             elif funct3 == 0x6:
@@ -294,16 +355,43 @@ class ReferenceCPU(CPUBackend):
             else:
                 self.halted = True
                 events.append("Unsupported I-type ALU instruction")
-        elif opcode == 0x03 and funct3 == 0x2:
+        elif opcode == 0x03:
             addr = (r1 + decode_i_imm(word)) & 0xFFFFFFFF
-            value = self.read_word(addr)
-            self._write_reg(rd, value, changed_registers, events)
-            events.append(f"load from 0x{addr:08X}")
-        elif opcode == 0x23 and funct3 == 0x2:
+            if funct3 == 0x0:
+                value = sign_extend(self.read_byte(addr), 8)
+            elif funct3 == 0x1:
+                value = sign_extend(self.read_half(addr), 16)
+            elif funct3 == 0x2:
+                value = self.read_word(addr)
+            elif funct3 == 0x4:
+                value = self.read_byte(addr)
+            elif funct3 == 0x5:
+                value = self.read_half(addr)
+            else:
+                self.halted = True
+                value = 0
+                events.append("Unsupported load instruction")
+            if not self.halted:
+                self._write_reg(rd, value, changed_registers, events)
+                events.append(f"load from 0x{addr:08X}")
+        elif opcode == 0x23:
             addr = (r1 + decode_s_imm(word)) & 0xFFFFFFFF
-            self.write_word(addr, r2)
-            changed_memory.append(addr)
-            events.append(f"store 0x{r2 & 0xFFFFFFFF:08X} -> [0x{addr:08X}]")
+            if funct3 == 0x0:
+                self.write_byte(addr, r2)
+                nbytes = 1
+            elif funct3 == 0x1:
+                self.write_half(addr, r2)
+                nbytes = 2
+            elif funct3 == 0x2:
+                self.write_word(addr, r2)
+                nbytes = 4
+            else:
+                self.halted = True
+                nbytes = 0
+                events.append("Unsupported store instruction")
+            if not self.halted:
+                changed_memory.extend(self._touched_words(addr, nbytes))
+                events.append(f"store 0x{r2 & 0xFFFFFFFF:08X} -> [0x{addr:08X}]")
         elif opcode == 0x63:
             offset = decode_b_imm(word)
             taken = False
@@ -315,6 +403,10 @@ class ReferenceCPU(CPUBackend):
                 taken = to_signed32(r1) < to_signed32(r2)
             elif funct3 == 0x5:
                 taken = to_signed32(r1) >= to_signed32(r2)
+            elif funct3 == 0x6:
+                taken = r1 < r2
+            elif funct3 == 0x7:
+                taken = r1 >= r2
             else:
                 self.halted = True
                 events.append("Unsupported branch instruction")
@@ -325,6 +417,8 @@ class ReferenceCPU(CPUBackend):
                 events.append("branch not taken")
         elif opcode == 0x37:
             self._write_reg(rd, decode_u_imm(word), changed_registers, events)
+        elif opcode == 0x17:
+            self._write_reg(rd, (pc_before + decode_u_imm(word)) & 0xFFFFFFFF, changed_registers, events)
         elif opcode == 0x6F:
             self._write_reg(rd, next_pc, changed_registers, events)
             next_pc = (pc_before + decode_j_imm(word)) & 0xFFFFFFFF
