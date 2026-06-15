@@ -277,7 +277,7 @@ def render(stdscr, cpu, program_name: str, ui: UIState, backends) -> None:
     memory_rows = max(1, min(MEMORY_LINES, bottom_h - 4))
     for i in range(memory_rows):
         addr = ui.mem_base + i * 4
-        value = cpu.memory.get(addr, 0)
+        value = cpu.data_word(addr)
         addr_attr = pc_attr if addr == cpu.pc else normal_attr
         value_attr = changed_attr if addr in cpu.last_result.changed_memory else normal_attr
         safe_addstr(stdscr, mem_header_y + 1 + i, 2, f"0x{addr:08X}", addr_attr)
