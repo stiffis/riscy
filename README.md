@@ -17,6 +17,7 @@ It can load assembly or hex programs, execute them instruction by instruction on
 
 - Loads `.s` and `.asm` files and assembles them through `tools/riscv_asm_to_hex.py`
 - Loads `.txt` and `.hex` files containing 32-bit instruction words
+- Loads `.bin` raw binaries (e.g. exported from CPUlator) at address `0x0`
 - Executes programs on a Python **single-cycle reference model**
 - Displays:
   - current `PC`
@@ -52,35 +53,20 @@ The current backend models **single-cycle architectural behavior** in Python. It
 
 ## Supported Instructions
 
-The current single-cycle backend supports this subset:
+The single-cycle backend implements the **RV32I base integer set**, over a
+byte-addressable little-endian memory:
 
-- `lw`
-- `addi`
-- `slli`
-- `xori`
-- `srli`
-- `srai`
-- `ori`
-- `andi`
-- `sw`
-- `add`
-- `sub`
-- `sll`
-- `slt`
-- `slti`
-- `xor`
-- `srl`
-- `sra`
-- `or`
-- `and`
-- `lui`
-- `beq`
-- `bne`
-- `blt`
-- `bge`
-- `jalr`
-- `jal`
+- Loads: `lb` `lh` `lw` `lbu` `lhu`
+- Stores: `sb` `sh` `sw`
+- ALU (imm): `addi` `slti` `sltiu` `xori` `ori` `andi` `slli` `srli` `srai`
+- ALU (reg): `add` `sub` `sll` `slt` `sltu` `xor` `srl` `sra` `or` `and`
+- Upper: `lui` `auipc`
+- Branches: `beq` `bne` `blt` `bge` `bltu` `bgeu`
+- Jumps: `jal` `jalr`
 - `nop`
+
+The stack pointer (`sp`) is initialised on reset so programs that use a stack
+(recursive code, etc.) run without extra setup.
 
 ## Requirements
 
