@@ -4,6 +4,7 @@
 \usepackage[T1]{fontenc}
 \usepackage[margin=2.4cm]{geometry}
 \usepackage{tikz}
+\usepackage{graphicx}
 \usepackage{xcolor}
 \usepackage{enumitem}
 \usepackage{booktabs}
@@ -12,6 +13,7 @@
 \usetikzlibrary{arrows.meta, positioning, fit, backgrounds, decorations.pathreplacing}
 
 \hypersetup{colorlinks=true, urlcolor=blue!60!black, linkcolor=black}
+\renewcommand{\figurename}{Figura}
 
 \definecolor{boxblue}{HTML}{2C5F8A}
 \definecolor{boxgray}{HTML}{4A4A4A}
@@ -156,6 +158,13 @@ y binario crudo (\texttt{.bin}, p.\,ej.\ exportado desde CPUlator).
 Controles principales: \texttt{s} (un paso), \texttt{c} (continuar hasta
 breakpoint), \texttt{b} (breakpoint), \texttt{j/k} (scroll), \texttt{r} (reset),
 \texttt{?} (ayuda), \texttt{q} (salir).
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\linewidth]{img/tui.png}
+  \caption{Interfaz de terminal: panel de programa con desensamblado, registros y
+           memoria. El \texttt{PC} y los valores que cambian se resaltan en cada paso.}
+\end{figure}
 
 \section{Validación}
 
