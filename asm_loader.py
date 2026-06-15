@@ -33,6 +33,15 @@ def load_program(path_str: str) -> ProgramImage:
         raise FileNotFoundError(path)
 
     suffix = path.suffix.lower()
+
+    if suffix == ".bin":
+        data = path.read_bytes()
+        words = [
+            int.from_bytes(data[i:i + 4].ljust(4, b"\x00"), "little")
+            for i in range(0, len(data), 4)
+        ]
+        return ProgramImage(path=path, words=words, source_lines=[f"{word:08X}" for word in words])
+
     text = path.read_text(encoding="utf-8")
 
     if suffix in {".s", ".asm"}:
@@ -50,4 +59,4 @@ def load_program(path_str: str) -> ProgramImage:
             words.append(int(line, 16))
         return ProgramImage(path=path, words=words, source_lines=[f"{word:08X}" for word in words])
 
-    raise ValueError(f"Unsupported input type '{suffix}'. Use .s, .asm, .txt, or .hex")
+    raise ValueError(f"Unsupported input type '{suffix}'. Use .s, .asm, .txt, .hex, or .bin")
