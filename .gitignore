@@ -11,3 +11,12 @@ hdl/obj_dir/
 hdl/*.so
 hdl/*.o
 hdl/*.a
+
+# LaTeX build artifacts
+docs/*.aux
+docs/*.log
+docs/*.out
+docs/*.fls
+docs/*.fdb_latexmk
+docs/*.synctex.gz
+docs/*.pdf
