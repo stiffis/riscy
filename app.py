@@ -331,6 +331,12 @@ def scroll_focused(ui: UIState, cpu: SingleCycleCPU, delta: int) -> None:
         ui.reg_top = max(0, min(31, ui.reg_top + delta))
 
 
+def follow_pc(ui: UIState, cpu: SingleCycleCPU) -> None:
+    pc_index = cpu.pc // 4
+    ui.prog_cursor = pc_index
+    ui.prog_top = max(0, pc_index - PROGRAM_LINES // 2)
+
+
 def recenter_focused(ui: UIState, cpu: SingleCycleCPU) -> None:
     if ui.focus == PROGRAM:
         ui.prog_cursor = cpu.pc // 4
@@ -392,18 +398,24 @@ def run_curses(stdscr, backends, program_name: str) -> None:
             ui.focus = FOCUS_MOVES[(ui.focus, key)]
         elif key in (ord("s"), ord("S")):
             cpu.step()
+            follow_pc(ui, cpu)
         elif key in (ord("n"), ord("N")):
             cpu.run(10)
+            follow_pc(ui, cpu)
         elif key in (ord("c"), ord("C")):
             cpu.continue_run()
+            follow_pc(ui, cpu)
         elif key in (ord("g"), ord("G")):
             cpu.run_to_end()
+            follow_pc(ui, cpu)
         elif key in (ord("t"), ord("T")):
             cpu.run_to_address(ui.prog_cursor * 4)
+            follow_pc(ui, cpu)
         elif key in (ord("b"), ord("B")):
             cpu.toggle_breakpoint(ui.prog_cursor * 4)
         elif key in (ord("r"), ord("R")):
             cpu.reset()
+            follow_pc(ui, cpu)
         elif key == ord("j"):
             scroll_focused(ui, cpu, +1)
         elif key == ord("k"):
